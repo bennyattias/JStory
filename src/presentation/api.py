@@ -1,7 +1,12 @@
 """FastAPI application"""
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler
+)
 from typing import List
 import os
 from pathlib import Path
@@ -26,6 +31,28 @@ from src.domain.repositories import (
 from src.domain.services import DocumentLoaderService, TextChunkingService
 
 app = FastAPI(title="JStory API", version="0.1.0")
+
+
+# Global exception handler to ensure all errors return JSON
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Handle all unhandled exceptions and return JSON"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "type": type(exc).__name__
+        }
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors and return JSON"""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": exc.body}
+    )
 
 # Create data directory if it doesn't exist
 DATA_DIR = Path("data")
@@ -267,7 +294,15 @@ async def root():
                         body: formData
                     });
                     
-                    const result = await response.json();
+                    let result;
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/json')) {
+                        result = await response.json();
+                    } else {
+                        const text = await response.text();
+                        statusDiv.innerHTML = `<div class="error">Error: Server returned non-JSON response: ${text.substring(0, 200)}</div>`;
+                        return;
+                    }
                     
                     if (response.ok) {
                         let html = '<div class="success">';
@@ -303,7 +338,15 @@ async def root():
                         body: JSON.stringify({ query: query })
                     });
                     
-                    const result = await response.json();
+                    let result;
+                    const contentType = response.headers.get('content-type');
+                    if (contentType && contentType.includes('application/json')) {
+                        result = await response.json();
+                    } else {
+                        const text = await response.text();
+                        resultsDiv.innerHTML = `<div class="error">Error: Server returned non-JSON response: ${text.substring(0, 200)}</div>`;
+                        return;
+                    }
                     
                     if (response.ok) {
                         let html = '';

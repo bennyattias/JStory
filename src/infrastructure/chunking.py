@@ -110,7 +110,7 @@ class LangChainTextChunker(TextChunkingService):
                 for chunk in chunks:
                     if len(chunk) > chunk_size * 3:  # Only split if 3x the chunk size
                         # Use recursive splitting for very long stories
-                        from langchain.text_splitter import RecursiveCharacterTextSplitter
+                        from langchain_text_splitters import RecursiveCharacterTextSplitter
                         splitter = RecursiveCharacterTextSplitter(
                             chunk_size=chunk_size,
                             chunk_overlap=chunk_overlap,
@@ -145,7 +145,7 @@ class LangChainTextChunker(TextChunkingService):
             # But try to keep stories intact as much as possible
             if len(story_text) > chunk_size * 3:  # Only split if 3x the chunk size
                 # Use recursive splitting for very long stories
-                from langchain.text_splitter import RecursiveCharacterTextSplitter
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
                 splitter = RecursiveCharacterTextSplitter(
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
