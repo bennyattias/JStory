@@ -1,77 +1,54 @@
-"""Text chunking implementation - splits by story boundaries"""
+"""Text chunking implementation - splits text into word-based chunks with overlap"""
 import re
 from typing import List
 from src.domain.services import TextChunkingService
 
 
 class LangChainTextChunker(TextChunkingService):
-    """Text chunking service that splits text by story boundaries"""
+    """Text chunking service that splits text into chunks of 1-300 words with overlap"""
     
     def __init__(
         self, 
         chunk_size: int = 1000, 
-        chunk_overlap: int = 200
+        chunk_overlap: int = 200,
+        min_words: int = 1,
+        max_words: int = 300,
+        overlap_words: int = 50
     ):
         """
         Initialize the text chunker
         
         Args:
-            chunk_size: Maximum size of each chunk (used if story is too long)
-            chunk_overlap: Number of characters to overlap between chunks (if needed)
+            chunk_size: Legacy parameter (kept for compatibility, not used)
+            chunk_overlap: Legacy parameter (kept for compatibility, not used)
+            min_words: Minimum words per chunk (default: 1)
+            max_words: Maximum words per chunk (default: 300)
+            overlap_words: Number of words to overlap between chunks (default: 50)
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        
-        # Common patterns for story boundaries
-        self.story_patterns = [
-            r'^Story\s+\d+[:\-]',  # "Story 1:", "Story 1-", etc.
-            r'^Chapter\s+\d+[:\-]',  # "Chapter 1:", etc.
-            r'^STORY\s+\d+[:\-]',  # "STORY 1:"
-            r'^\d+\.\s+[A-Z]',  # "1. Title" (numbered story)
-            r'^[A-Z][a-z]+\s+\d+[:\-]',  # "Tale 1:", "Fable 2:", etc.
-            r'\n\n[A-Z][^.!?]*\n\n',  # Double newline followed by title-like text
-        ]
+        self.min_words = min_words
+        self.max_words = max_words
+        self.overlap_words = overlap_words
     
-    def _find_story_boundaries(self, text: str) -> List[int]:
-        """
-        Find story boundary positions in text
-        
-        Args:
-            text: Text to analyze
-            
-        Returns:
-            List of positions where stories start
-        """
-        boundaries = [0]  # Start of text is always a boundary
-        
-        lines = text.split('\n')
-        current_pos = 0
-        
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            
-            # Check if this line matches a story boundary pattern
-            is_boundary = False
-            for pattern in self.story_patterns:
-                if re.match(pattern, line_stripped, re.IGNORECASE):
-                    is_boundary = True
-                    break
-            
-            # Also check for double newlines (common story separator)
-            if i > 0 and not line_stripped and i < len(lines) - 1:
-                # Empty line - check if next line looks like a story start
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    if next_line and len(next_line) < 100 and not next_line.endswith('.'):
-                        # Could be a title
-                        is_boundary = True
-            
-            if is_boundary and current_pos > 0:
-                boundaries.append(current_pos)
-            
-            current_pos += len(line) + 1  # +1 for newline
-        
-        return boundaries
+    def _count_words(self, text: str) -> int:
+        """Count the number of words in text"""
+        if not text or not text.strip():
+            return 0
+        # Split by whitespace and filter out empty strings
+        words = [w for w in text.split() if w.strip()]
+        return len(words)
+    
+    def _split_into_words(self, text: str) -> List[str]:
+        """Split text into words while preserving word boundaries"""
+        if not text or not text.strip():
+            return []
+        # Split by whitespace and filter out empty strings
+        return [w for w in text.split() if w.strip()]
+    
+    def _words_to_text(self, words: List[str], start_idx: int, end_idx: int) -> str:
+        """Convert a slice of words back to text"""
+        return ' '.join(words[start_idx:end_idx])
     
     def chunk_text(
         self, 
@@ -80,82 +57,56 @@ class LangChainTextChunker(TextChunkingService):
         chunk_overlap: int = None
     ) -> List[str]:
         """
-        Split text into chunks by story boundaries.
-        Prioritizes empty line separation (double newlines) for .txt files.
+        Split text into chunks of 1-300 words with overlap.
         
         Args:
             text: Text to chunk
-            chunk_size: Override default chunk size (for very long stories)
-            chunk_overlap: Override default chunk overlap (if needed)
+            chunk_size: Ignored (kept for interface compatibility)
+            chunk_overlap: Ignored (kept for interface compatibility)
             
         Returns:
-            List of text chunks, each representing a complete story
+            List of text chunks, each containing 1-300 words with overlap
         """
-        chunk_size = chunk_size or self.chunk_size
-        chunk_overlap = chunk_overlap or self.chunk_overlap
+        if not text or not text.strip():
+            return []
         
-        # First, try splitting by empty lines (double newlines) - most common format
-        # This handles the case where stories are separated by empty lines
-        if '\n\n' in text or text.count('\n') > text.count(' ') / 10:
-            # Split by double newlines (empty lines)
-            potential_chunks = text.split('\n\n')
-            
-            # Filter out empty chunks and strip whitespace
-            chunks = [chunk.strip() for chunk in potential_chunks if chunk.strip()]
-            
-            # If we got multiple chunks from empty line splitting, use those
-            if len(chunks) > 1:
-                # Handle very long stories
-                final_chunks = []
-                for chunk in chunks:
-                    if len(chunk) > chunk_size * 3:  # Only split if 3x the chunk size
-                        # Use recursive splitting for very long stories
-                        from langchain_text_splitters import RecursiveCharacterTextSplitter
-                        splitter = RecursiveCharacterTextSplitter(
-                            chunk_size=chunk_size,
-                            chunk_overlap=chunk_overlap,
-                            length_function=len,
-                            separators=["\n\n", "\n", ". ", " ", ""]
-                        )
-                        sub_chunks = splitter.split_text(chunk)
-                        final_chunks.extend(sub_chunks)
-                    else:
-                        final_chunks.append(chunk)
-                return final_chunks
+        # Split text into words
+        words = self._split_into_words(text)
+        total_words = len(words)
         
-        # Fallback to pattern-based boundary detection
-        boundaries = self._find_story_boundaries(text)
+        if total_words == 0:
+            return []
         
-        # If no boundaries found, treat entire text as one story
-        if len(boundaries) <= 1:
-            return [text.strip()] if text.strip() else []
+        # If text is shorter than max_words, return as single chunk
+        if total_words <= self.max_words:
+            return [text.strip()]
         
-        # Extract stories based on boundaries
         chunks = []
-        for i in range(len(boundaries)):
-            start = boundaries[i]
-            end = boundaries[i + 1] if i + 1 < len(boundaries) else len(text)
-            
-            story_text = text[start:end].strip()
-            
-            if not story_text:
-                continue
-            
-            # If a story is extremely long, we might need to split it further
-            # But try to keep stories intact as much as possible
-            if len(story_text) > chunk_size * 3:  # Only split if 3x the chunk size
-                # Use recursive splitting for very long stories
-                from langchain_text_splitters import RecursiveCharacterTextSplitter
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=chunk_size,
-                    chunk_overlap=chunk_overlap,
-                    length_function=len,
-                    separators=["\n\n", "\n", ". ", " ", ""]
-                )
-                sub_chunks = splitter.split_text(story_text)
-                chunks.extend(sub_chunks)
-            else:
-                chunks.append(story_text)
+        start_idx = 0
         
-        return chunks
+        while start_idx < total_words:
+            # Calculate end index for this chunk
+            end_idx = min(start_idx + self.max_words, total_words)
+            
+            # Extract chunk
+            chunk_words = words[start_idx:end_idx]
+            chunk_text = self._words_to_text(words, start_idx, end_idx)
+            
+            # Only add chunk if it meets minimum word requirement
+            if len(chunk_words) >= self.min_words:
+                chunks.append(chunk_text.strip())
+            
+            # If we've reached the end, break
+            if end_idx >= total_words:
+                break
+            
+            # Move start index forward, accounting for overlap
+            # Next chunk starts at current end minus overlap
+            start_idx = max(start_idx + 1, end_idx - self.overlap_words)
+            
+            # Safety check to prevent infinite loops
+            if start_idx >= end_idx:
+                start_idx = end_idx
+        
+        return chunks if chunks else [text.strip()]
 

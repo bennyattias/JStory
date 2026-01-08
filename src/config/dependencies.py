@@ -60,6 +60,9 @@ def get_text_chunking_service() -> TextChunkingService:
     config = get_settings()
     return LangChainTextChunker(
         chunk_size=config.chunk_size,
-        chunk_overlap=config.chunk_overlap
+        chunk_overlap=config.chunk_overlap,
+        min_words=config.min_words,
+        max_words=config.max_words,
+        overlap_words=config.overlap_words
     )
 

@@ -9,6 +9,7 @@ from fastapi.exception_handlers import (
 )
 from typing import List
 import os
+import logging
 from pathlib import Path
 
 from src.config.dependencies import (
@@ -16,7 +17,8 @@ from src.config.dependencies import (
     get_embedding_repository,
     get_llm_repository,
     get_document_loader_service,
-    get_text_chunking_service
+    get_text_chunking_service,
+    get_settings
 )
 from src.application.use_cases import (
     IngestStoriesUseCase,
@@ -29,6 +31,10 @@ from src.domain.repositories import (
     LLMRepository
 )
 from src.domain.services import DocumentLoaderService, TextChunkingService
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="JStory API", version="0.1.0")
 
@@ -57,6 +63,46 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # Create data directory if it doesn't exist
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Preload all stories from the data directory on startup"""
+    settings = get_settings()
+    data_dir = Path(settings.data_dir)
+    
+    if not data_dir.exists():
+        logger.warning(f"Data directory {data_dir} does not exist. Skipping story preload.")
+        return
+    
+    # Get all story files (PDF and TXT)
+    story_files = []
+    for ext in ['*.pdf', '*.txt']:
+        story_files.extend(data_dir.glob(ext))
+        story_files.extend(data_dir.glob(ext.upper()))
+    
+    if not story_files:
+        logger.info(f"No story files found in {data_dir}. Stories will need to be uploaded manually.")
+        return
+    
+    logger.info(f"Found {len(story_files)} story file(s) to preload...")
+    
+    # Initialize use case for ingestion
+    ingest_use_case = get_ingest_use_case()
+    
+    # Process each file
+    total_ingested = 0
+    for file_path in story_files:
+        try:
+            logger.info(f"Preloading stories from: {file_path.name}")
+            result = await ingest_use_case.execute(str(file_path))
+            total_ingested += result.get('stories_ingested', 0)
+            logger.info(f"✓ Successfully preloaded {result.get('stories_ingested', 0)} chunks from {file_path.name}")
+        except Exception as e:
+            logger.error(f"✗ Error preloading {file_path.name}: {str(e)}")
+            # Continue with other files even if one fails
+    
+    logger.info(f"Startup complete: Preloaded {total_ingested} total chunks from {len(story_files)} file(s)")
 
 
 # Dependency injection for use cases
@@ -251,12 +297,9 @@ async def root():
             </div>
             <div class="content">
                 <div class="section">
-                    <h2>📤 Upload Stories</h2>
-                    <div class="upload-area">
-                        <p>Upload PDF or TXT files containing stories<br><small>(TXT files: stories separated by empty lines)</small></p>
-                        <input type="file" id="fileInput" accept=".pdf,.txt" multiple>
-                        <button onclick="uploadFiles()">Upload & Ingest</button>
-                        <div id="uploadStatus"></div>
+                    <h2>📚 Preloaded Stories</h2>
+                    <div class="upload-area" style="background: #e8f5e9; border-color: #4caf50;">
+                        <p>Stories have been automatically preloaded from the data directory.<br><small>You can start searching immediately!</small></p>
                     </div>
                 </div>
                 
@@ -272,54 +315,6 @@ async def root():
         </div>
         
         <script>
-            async function uploadFiles() {
-                const input = document.getElementById('fileInput');
-                const statusDiv = document.getElementById('uploadStatus');
-                
-                if (!input.files || input.files.length === 0) {
-                    statusDiv.innerHTML = '<div class="error">Please select at least one PDF file</div>';
-                    return;
-                }
-                
-                statusDiv.innerHTML = '<div class="loading">Uploading and processing files...</div>';
-                
-                const formData = new FormData();
-                for (let file of input.files) {
-                    formData.append('files', file);
-                }
-                
-                try {
-                    const response = await fetch('/api/ingest', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    let result;
-                    const contentType = response.headers.get('content-type');
-                    if (contentType && contentType.includes('application/json')) {
-                        result = await response.json();
-                    } else {
-                        const text = await response.text();
-                        statusDiv.innerHTML = `<div class="error">Error: Server returned non-JSON response: ${text.substring(0, 200)}</div>`;
-                        return;
-                    }
-                    
-                    if (response.ok) {
-                        let html = '<div class="success">';
-                        result.forEach(r => {
-                            html += `<p>✓ ${r.title || r.file_path}: ${r.stories_ingested} stories ingested</p>`;
-                        });
-                        html += '</div>';
-                        statusDiv.innerHTML = html;
-                        input.value = '';
-                    } else {
-                        statusDiv.innerHTML = `<div class="error">Error: ${result.detail || 'Unknown error'}</div>`;
-                    }
-                } catch (error) {
-                    statusDiv.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-                }
-            }
-            
             async function searchStories() {
                 const query = document.getElementById('queryInput').value.trim();
                 const resultsDiv = document.getElementById('searchResults');
@@ -356,22 +351,6 @@ async def root():
                             html += '<div class="response">';
                             html += '<h3>🤖 Generated Response</h3>';
                             html += '<p>' + result.response.replace(/\\n/g, '<br>') + '</p>';
-                            html += '</div>';
-                        }
-                        
-                        // Show citations
-                        if (result.citations && result.citations.length > 0) {
-                            html += '<div class="results">';
-                            html += '<h3>📖 Relevant Story Excerpts</h3>';
-                            result.citations.forEach((citation, idx) => {
-                                html += '<div class="result-item">';
-                                html += `<h3>Source ${idx + 1}: ${citation.metadata?.title || 'Untitled'}</h3>`;
-                                if (citation.metadata?.source) {
-                                    html += `<p class="score">From: ${citation.metadata.source}</p>`;
-                                }
-                                html += `<div class="content">${citation.content.substring(0, 500)}${citation.content.length > 500 ? '...' : ''}</div>`;
-                                html += '</div>';
-                            });
                             html += '</div>';
                         }
                         

@@ -35,29 +35,26 @@ class OpenAILLMService(LLMRepository):
             Generated response string
         """
         if not context_chunks:
-            return "I couldn't find any relevant stories to answer your query."
+            return "No relevant stories found."
         
-        # Build context from chunks with citations
+        # Build context from chunks without source labels
         context_parts = []
-        for i, chunk in enumerate(context_chunks, 1):
-            source = chunk.metadata.get('source', 'Unknown')
-            title = chunk.metadata.get('title', 'Untitled')
-            context_parts.append(
-                f"[Source {i}: {title} from {source}]\n{chunk.content}\n"
-            )
+        for chunk in context_chunks:
+            context_parts.append(chunk.content)
         
-        context = "\n---\n".join(context_parts)
+        context = "\n\n---\n\n".join(context_parts)
         
-        system_prompt = """You are a helpful assistant that answers questions about stories.
-When answering, reference the specific sources provided. Be accurate and cite which source
-each piece of information comes from using [Source 1], [Source 2], etc."""
+        system_prompt = """You are a story retriever. When asked for a story or type of story, 
+return the story content directly without any commentary, explanation, or personal take. 
+Do not address the user or use phrases like "I", "you", "based on", or "the story says". 
+Simply present the story as it is. Write in third person narrative style only."""
         
-        user_prompt = f"""Based on the following story excerpts, please answer this question: {query}
+        user_prompt = f"""Query: {query}
 
 Story Excerpts:
 {context}
 
-Please provide a comprehensive answer with citations."""
+Return the story content directly without commentary or addressing the user."""
         
         response = await self.client.chat.completions.create(
             model=self.model_name,
